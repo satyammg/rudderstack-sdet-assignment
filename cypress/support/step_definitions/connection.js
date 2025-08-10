@@ -1,103 +1,84 @@
 import { Given, When, Then } from "@badeball/cypress-cucumber-preprocessor";
 
-Given('I am logged in to Rudderstack', () => {
-    // Use Cypress env variables to get credentials
+Given('I am logged in to Rudderstack', function() {
     const username = Cypress.env('RUDDERSTACK_USERNAME');
     const password = Cypress.env('RUDDERSTACK_PASSWORD');
 
-    //Login to website
+    // Login in with credentials
     cy.login(username, password);
 
-    //Validate Connection page is successfully displayed
-    cy.xpath('//h3[text()="Connections"]', { timeout: 10000 }).should('be.visible');
-    cy.contains('Destinations', { timeout: 10000 }).should('be.visible');
-    cy.contains('Sources', { timeout: 10000 }).should('be.visible');
+    // Validate Connection page is successfully displayed
+    cy.contains('h3', 'Connections', { timeout: 20000 }).should('be.visible');
+    cy.contains('Destinations', { timeout: 20000 }).should('be.visible');
+    cy.contains('Sources', { timeout: 20000 }).should('be.visible');
 });
 
-
-When('I retrieve the data plane URL and write key of the HTTP source', () => {
-
-    //Read and Store data plane url
-    cy.get('.dataplane-url-copy-cta')
-        .siblings('span')
+When('I retrieve the data plane URL and the HTTP source write key', function() {
+    cy.xpath("(//span[text()='Data Plane']/following::div/span)[1]")
         .invoke('text')
         .as('dataPlaneUrl');
 
-    cy.get('@dataPlaneUrl').then((url) => {
-        cy.log(`The stored data plane URL is: ${url}`);
-    });
-
-    //Copy and store the write key of the HTTP Source
     cy.contains('span', 'Write key')
         .invoke('text')
         .then((fullText) => {
             const writeKey = fullText.replace('Write key ', '');
             cy.wrap(writeKey).as('httpWriteKey');
         });
-
-    cy.get('@httpWriteKey').then((key) => {
-        cy.log(`The stored write key is: ${key}`);
-    });
 });
 
+When('I navigate to the webhook events page and get the initial count', function() {
+    // Click on Webhook
+    cy.get('#destination-310qDIgEE1ekkG3RvOuYZCXA9Bw').click();
 
-When('I send an event to the HTTP source via API', () => {
-    // Chain Cypress commands to ensure aliases are resolved before use.
-    cy.get('@dataPlaneUrl').then((dataPlaneUrl) => {
-        cy.get('@httpWriteKey').then((httpWriteKey) => {
+    // Click on event tab of the destination.
+    cy.get('#rc-tabs-0-tab-Events', { timeout: 10000 }).should('be.visible').click();
 
-            const base64Key = btoa(`${httpWriteKey}:`);
+    // Read the initial count of delivered event
+    cy.xpath('(//span[text()="Delivered"]/following::div/h2)[1]/span', { timeout: 15000 })
+        .invoke('text')
+        .as('initialDeliveredCount');
 
-            const requestBody = {
-                userId: 'user123',
-                event: 'Product Purchased',
-                properties: {
-                    name: "Rubik's Cube",
-                    revenue: 4.99,
-                },
-                context: {
-                    ip: '14.5.67.21',
-                },
-                timestamp: '2020-02-02T00:23:09.544Z',
-            };
-
-            // Make the API call using cy.request()
-            cy.request({
-                method: 'POST',
-                // Use the resolved variable correctly in the URL
-                url: `${dataPlaneUrl}/v1/track`,
-                body: requestBody,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Basic ${base64Key}`
-                },
-            }).then((response) => {
-                // Assert that the request was successful
-                expect(response.status).to.eq(200);
-            });
-        });
-    });
+    // Read the initial count of failed event
+    cy.xpath('(//span[text()="Failed"]/following::div/h2)[1]/span')
+        .invoke('text')
+        .as('initialFailedCount');
 });
 
-Then('I should navigate to the Events tab', () => {
+When('I send a track event to the source via API', function() {
 
-    //Click on Webhook
-    cy.get('#destination-310qDIgEE1ekkG3RvOuYZCXA9Bw').click()
+    const dataPlaneUrl = this.dataPlaneUrl;
+    const httpWriteKey = this.httpWriteKey;
 
-    //Click on event tab of the destination.
-    cy.get('#rc-tabs-0-tab-Events', { timeout: 10000 }).should('be.visible').click()
+    const base64Key = btoa(`${httpWriteKey}:`);
+    const requestBody = {
+        userId: 'user123',
+        event: 'Product Purchased',
+        properties: { name: "Rubik's Cube", revenue: 4.99 },
+        context: { ip: '14.5.67.21' },
+        timestamp: new Date().toISOString(),
+    };
 
+    cy.request({
+        method: 'POST',
+        url: `${dataPlaneUrl}/v1/track`,
+        body: requestBody,
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Basic ${base64Key}`
+        },
+    }).its('status').should('eq', 200);
 });
 
-Then('I should read the count of delivered and failed events', () => {
+Then('the delivered event count should increase by one and failed event count should be zero', function() {
+    // Wait for 70 sec due to reporting latency
+    cy.wait(70000);
 
-    cy.xpath('(//span[text()="Delivered"]/following::div/h2)[1]/span', { timeout: 15000 }).invoke('text').as('delivered');
-    cy.get('@delivered').then((deliveredValue) => {
-        cy.log(`Count of delivered is: ${deliveredValue}`);
-    });
+    // On the events page, click the refresh button to get the latest data
+    cy.xpath("//span[text()='Refresh']").should('be.visible').click();
 
-    cy.xpath('(//span[text()="Delivered"]/following::div/h2)[2]/span').invoke('text').as('failed');
-    cy.get('@failed').then((failedValue) => {
-        cy.log(`Count of failed is: ${failedValue}`);
-    });
+    // Custom command to validate the delivered count.
+    cy.validateEventCount('Delivered', '@initialDeliveredCount', 1);
+
+    // Custom command to validate the failed count.
+    cy.validateEventCount('Failed', '@initialFailedCount', 0);
 });
